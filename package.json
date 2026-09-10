@@ -1,0 +1,36 @@
+{
+  "name": "pi-project-orchestrator",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Pi Skill package for project-development-orchestrator: SKILL.md, references, templates and two thin CLI wrapper scripts (run-claude, run-cursor).",
+  "type": "commonjs",
+  "license": "MIT",
+  "engines": {
+    "node": "^22.19.0 || ^24.0.0 || >=26.0.0"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-skill",
+    "claude-code",
+    "cursor-agent"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/stones-hub/pi-project-orchestrator.git"
+  },
+  "homepage": "https://github.com/stones-hub/pi-project-orchestrator#readme",
+  "bugs": {
+    "url": "https://github.com/stones-hub/pi-project-orchestrator/issues"
+  },
+  "pi": {
+    "skills": [
+      "skill/project-development-orchestrator"
+    ]
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^5.0.0"
+  }
+}

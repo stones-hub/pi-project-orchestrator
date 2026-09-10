@@ -1,0 +1,229 @@
+#!/usr/bin/env node
+"use strict";
+
+/**
+ * Thin CLI wrapper around the real `cursor-agent` binary: builds the real,
+ * locally-verified argv shape (see references/cursor.md, including the
+ * explicit --sandbox value fix for a real CLI bug where a bare --sandbox
+ * flag swallows the next argv token), spawns it, saves the raw stdout to an
+ * evidence file, and prints a small summary. Not a state machine or security
+ * platform: no auto-fallback, no retry, no commit/push/deploy, no credential
+ * handling.
+ */
+
+const fs = require("node:fs");
+const path = require("node:path");
+const { spawnSync } = require("node:child_process");
+const { acquireWorkspaceWriteLock, canonicalizeWorkspace } = require("./workspace-write-lock");
+
+const MODES = new Set(["investigate", "code", "review"]);
+
+function parseArgs(argv) {
+  const opts = {
+    mode: null,
+    prompt: null,
+    model: null,
+    evidenceFile: null,
+    resume: null,
+    workspace: null,
+    command: "cursor-agent",
+    argvPrefix: [],
+    sandbox: "enabled",
+  };
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    switch (arg) {
+      case "--mode":
+        opts.mode = argv[++i];
+        break;
+      case "--prompt":
+        opts.prompt = argv[++i];
+        break;
+      case "--model":
+        opts.model = argv[++i];
+        break;
+      case "--evidence-file":
+        opts.evidenceFile = argv[++i];
+        break;
+      case "--resume":
+        opts.resume = argv[++i];
+        break;
+      case "--workspace":
+        opts.workspace = argv[++i];
+        break;
+      case "--command":
+        opts.command = argv[++i];
+        break;
+      case "--argv-prefix":
+        opts.argvPrefix.push(argv[++i]);
+        break;
+      case "--no-sandbox":
+        opts.sandbox = "disabled";
+        break;
+      default:
+        throw new UsageError(`unknown argument '${arg}'`);
+    }
+  }
+  return opts;
+}
+
+class UsageError extends Error {}
+
+function validate(opts) {
+  if (!opts.mode || !MODES.has(opts.mode)) {
+    throw new UsageError(`--mode must be one of investigate|code|review, got '${opts.mode}'`);
+  }
+  if (!opts.prompt) {
+    throw new UsageError("--prompt is required");
+  }
+  if (!opts.model) {
+    throw new UsageError("--model is required and must be non-empty");
+  }
+  if (!opts.evidenceFile) {
+    throw new UsageError("--evidence-file is required");
+  }
+  if (opts.mode === "review" && opts.resume) {
+    throw new UsageError("--resume is not allowed with --mode review; independent review must start a fresh session");
+  }
+}
+
+function buildArgv(opts) {
+  const readOnly = opts.mode === "investigate" || opts.mode === "review";
+  const argv = ["-p", opts.prompt, "--trust"];
+  if (readOnly) {
+    argv.push("--mode", "plan");
+  } else {
+    // Real CLI bug (verified on a real local probe): a bare --sandbox flag
+    // with no value causes cursor-agent to swallow the next argv token as
+    // the sandbox mode. Always pass an explicit enabled/disabled value.
+    argv.push("--force", "--sandbox", opts.sandbox);
+  }
+  if (opts.resume) {
+    argv.push("--resume", opts.resume);
+  }
+  if (opts.workspace) {
+    argv.push("--workspace", opts.workspace);
+  }
+  argv.push("--output-format", "json", "--model", opts.model);
+  return argv;
+}
+
+function parseCursorOutput(stdout) {
+  const lines = stdout.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+  let parsed = null;
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    try {
+      parsed = JSON.parse(lines[i]);
+      break;
+    } catch {
+      // keep scanning earlier lines for stream-json's last valid object
+    }
+  }
+  if (!parsed) {
+    return { ok: false, parseError: "stdout has no valid JSON line" };
+  }
+  const sessionId = parsed.session_id ?? parsed.chatId ?? parsed.chat_id ?? null;
+  if (!sessionId) {
+    return { ok: false, parseError: "response JSON is missing session_id/chatId/chat_id" };
+  }
+  if (typeof parsed.is_error !== "boolean" || typeof parsed.result !== "string") {
+    return { ok: false, parseError: "response JSON is missing a terminal result/is_error shape" };
+  }
+  return {
+    ok: true,
+    sessionId,
+    model: typeof parsed.model === "string" ? parsed.model : null,
+    result: parsed.result,
+    isError: parsed.is_error === true,
+    usage: parsed.usage ?? null,
+  };
+}
+
+function main(argv) {
+  let opts;
+  try {
+    opts = parseArgs(argv);
+    validate(opts);
+  } catch (err) {
+    if (err instanceof UsageError) {
+      process.stdout.write(JSON.stringify({ ok: false, status: "blocked", reason: err.message }) + "\n");
+      return 2;
+    }
+    throw err;
+  }
+
+  let cwd;
+  try {
+    cwd = canonicalizeWorkspace(opts.workspace ?? process.cwd());
+    if (opts.workspace) opts.workspace = cwd;
+  } catch (err) {
+    process.stdout.write(
+      JSON.stringify({ ok: false, status: "blocked", reason: `workspace cannot be resolved: ${String(err.message ?? err)}` }) + "\n",
+    );
+    return 2;
+  }
+
+  let writeLock = null;
+  if (opts.mode === "code") {
+    try {
+      writeLock = acquireWorkspaceWriteLock(cwd, "cursor");
+    } catch (err) {
+      process.stdout.write(
+        JSON.stringify({ ok: false, status: "blocked", reason: `workspace write lock failed: ${String(err.message ?? err)}` }) + "\n",
+      );
+      return 2;
+    }
+    if (!writeLock.ok) {
+      process.stdout.write(JSON.stringify({ ok: false, status: "blocked", reason: writeLock.reason }) + "\n");
+      return 2;
+    }
+  }
+
+  const argvSuffix = buildArgv(opts);
+  const spawnArgv = [...opts.argvPrefix, ...argvSuffix];
+  let result;
+  try {
+    result = spawnSync(opts.command, spawnArgv, { cwd, encoding: "utf8" });
+  } finally {
+    writeLock?.release();
+  }
+
+  if (result.error) {
+    process.stdout.write(
+      JSON.stringify({ ok: false, status: "executor_unavailable", reason: String(result.error.message ?? result.error) }) + "\n",
+    );
+    return 3;
+  }
+
+  fs.mkdirSync(path.dirname(path.resolve(opts.evidenceFile)), { recursive: true });
+  const stdoutEvidenceFile = path.resolve(opts.evidenceFile);
+  const stderrEvidenceFile = `${stdoutEvidenceFile}.stderr`;
+  fs.writeFileSync(stdoutEvidenceFile, result.stdout ?? "", "utf8");
+  fs.writeFileSync(stderrEvidenceFile, result.stderr ?? "", "utf8");
+
+  const parsed = parseCursorOutput(result.stdout ?? "");
+  const succeeded = parsed.ok && parsed.isError !== true && result.status === 0;
+
+  process.stdout.write(
+    JSON.stringify({
+      ok: succeeded,
+      status: succeeded ? "success" : "failure",
+      exitCode: result.status,
+      sessionId: parsed.sessionId ?? null,
+      model: parsed.model ?? null,
+      usage: parsed.usage ?? null,
+      result: parsed.result ?? null,
+      isError: parsed.ok ? parsed.isError : null,
+      parseError: parsed.parseError ?? null,
+      stdoutEvidenceFile,
+      stderrEvidenceFile,
+    }) + "\n",
+  );
+  return succeeded ? 0 : 1;
+}
+
+if (require.main === module) {
+  process.exit(main(process.argv.slice(2)));
+}
+
+module.exports = { main, parseArgs, validate, buildArgv, parseCursorOutput, UsageError };
