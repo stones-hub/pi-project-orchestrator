@@ -38,10 +38,10 @@ cursor-agent -p "<prompt>" \
 ```
 
 - `--trust --force` 是 Cursor 非交互写模式的必需参数。
-- wrapper 启动进程前会按 `realpath(workspace)` 获取与 Claude 共用的写锁；同一
-  真实工作区已有任一写 Agent 时返回 `blocked`，不同工作区不互相阻塞。锁在
+- wrapper 启动进程前会按 `realpath(workspace)` 获取与 Claude、Codex 共用的写锁；
+  同一真实工作区已有任一写 Agent 时返回 `blocked`，不同工作区不互相阻塞。锁在
   子进程成功、失败或启动报错后都会释放，死 PID 遗留锁可恢复。只读模式不占锁。
-  禁止在调用外层再用全局 `pgrep cursor-agent` 判断并发。
+  禁止在调用外层再用全局进程查找判断并发。
 - `--sandbox` **必须始终带显式值**（`enabled` 或 `disabled`）。这是本机实测
   发现的真实 CLI 行为：裸 `--sandbox`（不带值）会导致 Cursor CLI 把下一个
   argv token 误当成 sandbox 的值吃掉，从而破坏后续参数——`run-cursor` 默认
@@ -72,17 +72,22 @@ Cursor 支持 `json` 和 `stream-json` 两种输出格式；`run-cursor` 按"最
 
 判定成功不能只看会话标识是否存在：空输出、全部行均非法 JSON、末尾有效对象
 缺少任一会话标识字段、或 `is_error`/`result` 二者任一缺失/类型不对，均判定
-为 `failure`。完整原始 stdout（包括 stream-json 的所有行）和 stderr 分别写入
-`--evidence-file` 指定路径（stdout）及其 `.stderr` 后缀路径（stderr）；wrapper
-打印给调用方（Pi）的摘要 JSON 不会整段回显原始 stdout/stderr，但会包含解析后的
-`result` 结构化字段，供 Pi 读取正常调用正文。调用方必须把它当作模型输出处理，
-不能向执行器提供真实凭证或要求其回显敏感文件。
+为 `failure`。完整原始 stdout（包括 stream-json 的所有行）和 stderr 在子进程
+启动前即创建证据文件，并边产生边写入 `--evidence-file` 指定路径（stdout）及其
+`.stderr` 后缀路径（stderr）；不受 Node `spawnSync` maxBuffer 限制。内存中仅
+保留每流固定 1 MiB 解析缓冲；超出时完整证据仍落盘，摘要以 `failure` + 明确
+`parseError` 返回。`executor_unavailable` 仅表示无法启动执行器（如 ENOENT）；
+执行中失败、信号退出或输出解析失败归 `failure`。wrapper 打印给调用方（Pi）的
+摘要 JSON 不会整段回显原始 stdout/stderr，但会包含解析后的 `result` 结构化
+字段，供 Pi 读取正常调用正文。`--command` 若使用，是调用方显式信任覆盖；
+`--argv-prefix` 不被接受。调用方必须把它当作模型输出处理，不能向执行器提供
+真实凭证或要求其回显敏感文件。
 
 ## 会话续接（resume）
 
 与 Claude 相同：是否续接由调用方（Pi）判断，`run-cursor` 只透传收到的
-`--resume`，自己不保存状态。任务从 Claude 换成 Cursor（或反之）算切换执行
-器，不是同一会话的续接，不要把上一个执行器的 session id 传给另一个执行器。
+`--resume`，自己不保存状态。从 Claude、Cursor、Codex 中任一执行器切换到另一个
+都算切换执行器，不是同一会话的续接，不要跨执行器传递 session id。
 
 ## 独立复审场景下的典型用法
 

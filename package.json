@@ -1,8 +1,8 @@
 {
   "name": "pi-project-orchestrator",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
-  "description": "Pi Skill package for project-development-orchestrator: SKILL.md, references, templates and two thin CLI wrapper scripts (run-claude, run-cursor).",
+  "description": "Pi Skill package for project-development-orchestrator: SKILL.md, references, templates and three thin CLI wrapper scripts (run-claude, run-cursor, run-codex).",
   "type": "commonjs",
   "license": "MIT",
   "engines": {
@@ -12,7 +12,8 @@
     "pi-package",
     "pi-skill",
     "claude-code",
-    "cursor-agent"
+    "cursor-agent",
+    "openai-codex"
   ],
   "repository": {
     "type": "git",
@@ -28,7 +29,7 @@
     ]
   },
   "scripts": {
-    "test": "vitest run"
+    "test": "vitest run && node --test skill/project-development-orchestrator/scripts/spawn-with-evidence.test.js"
   },
   "devDependencies": {
     "vitest": "^5.0.0"

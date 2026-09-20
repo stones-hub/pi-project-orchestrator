@@ -1,96 +1,89 @@
 # Handover
 
-## 当前状态：v0.2.0 公开发布候选
+## 当前状态：v0.3.0 发布候选验收通过
 
-本仓库正在准备作为 Pi 原生 Git package 公开发布（目标标签 `v0.2.0`）。当前
-仍然没有任何 Git commit、tag 或推送；下面描述的是本机工作区的候选状态。
+当前 HEAD 为已打 `v0.2.0` 标签的 `55108f0b1d0bfd34590e37816ee95eb18b839114`。
+工作区已完成 OpenAI Codex CLI 同级执行器、三个 wrapper 的流式证据加固和
+`v0.3.0` 版本信息；本轮尚未 commit、push 或创建 `v0.3.0` tag。
 
-## 已完成内容
+## 已完成
 
-- Skill 本体位于 `skill/project-development-orchestrator/`：`SKILL.md`、5 个
-  `references/*.md`、5 个 `templates/*.md`、两个执行器 wrapper
-  （`scripts/run-claude`、`scripts/run-cursor`）、共用的工作区写锁实现
-  （`scripts/workspace-write-lock.js`）及其测试。
-- 两个 wrapper 用真实本机验证过的 CLI 参数形状实现（Claude Code
-  investigate/code/review、Cursor investigate/code/review，含 `--sandbox`
-  显式值），argv 用数组传给 `spawnSync`，不拼 shell 字符串；不自动
-  fallback/重试/commit/push/deploy；不读取或保存凭证。stdout/stderr 分别落盘
-  为独立证据文件，摘要 JSON 不回显原始内容。
-- 同一真实工作区同一时刻只允许一个有写权限的编码 Agent
-  （`workspace-write-lock.js`），只读调用不占锁，不同工作区互不阻塞。
-- 公开发布打包：新增 `LICENSE`（MIT）、`CHANGELOG.md`；`package.json` 新增
-  `pi-package` keyword 和显式 `pi.skills` manifest 指向
-  `skill/project-development-orchestrator`；`README.md`、
-  `docs/installation-guide.md` 改为以固定 tag 的
-  `pi install git:github.com/stones-hub/pi-project-orchestrator@<tag>` 作为
-  推荐安装方式，保留手工复制方式给 Skill 开发/贡献者使用；`docs/design.md`
-  的 Skill 目录结构说明补齐了写锁实现和测试文件。
-- 第二轮窄修：`package.json` 的 `engines.node` 改成
-  `^22.19.0 || ^24.0.0 || >=26.0.0`（同时满足 Pi 0.85.1 的 `>=22.19.0` 下限
-  和 vitest 5 实际支持的 `^22.12.0 || ^24.0.0 || >=26.0.0`，不再用会误纳
-  Node 23.x/25.x 的简单 `>=22.19.0`）；用 `npm install --package-lock-only`
-  把这个 `engines` 和 `license` 同步进 `package-lock.json` 根 package 条目
-  （已核对未改动任何依赖解析版本）；README 的 Pi 链接改成安装包
-  `package.json` 自己声明的 `repository` 地址，不再链接可能只是组织首页的
-  URL。
+- 新增 `scripts/run-codex`：支持只读调查、编码、续接和独立复审；只读模式使用
+  `read-only`，编码使用 `workspace-write`，并接入跨执行器工作区写锁。
+- Codex 自动发现只接受 PATH 中绝对目录，不接受空段/相对目录，不回退裸命令；
+  `CODEX_COMMAND` / `--command` 是调用方显式信任覆盖；三个 wrapper 均拒绝
+  `--argv-prefix` 参数注入。
+- 新增共享 `scripts/spawn-with-evidence.js`：异步启动执行器，启动前准备并打开证据
+  文件，完整处理短写、零写、setup/open、子进程和 stdout/stderr 流错误；完整原始
+  输出落盘，每流只保留固定 1 MiB 内存解析缓冲，避免 `spawnSync` 的 ENOBUFS 和
+  无限制内存增长。
+- 证据 setup、执行器启动、运行、解析和流错误均有结构化结果；`code` 模式所有已知
+  成功/失败路径均通过 `finally` 释放写锁。
+- 新增/更新 Codex、三个 wrapper、共享 helper、写锁和公开发布测试；默认
+  `npm test` 已包含 helper 专项测试。
+- README、设计、安装指南、Skill、参考文档、模板、CHANGELOG、package 元数据均
+  已同步为三个执行器和 `v0.3.0`。
 
-## 已验证内容
+## Pi 独立验收
 
-- `npm test`（vitest）：`tests/run-claude.test.ts`、`tests/run-cursor.test.ts`
-  全部通过。
+- `npm test`：Vitest 4 个文件、56 个测试通过；共享 helper 14 个测试通过。
 - `node --test skill/project-development-orchestrator/scripts/workspace-write-lock.test.js`：
-  通过。
-- 两个 wrapper 和 `workspace-write-lock.js` 的 `node --check` 语法检查通过。
-- `git diff --check`：本仓库当前没有 HEAD（无任何 commit），已改用适用于
-  未跟踪文件的等价检查（对每个待发布文件单独跑
-  `git diff --no-index --check /dev/null <file>` 或等效方式）确认没有空白/
-  冲突标记问题；这不是标准 `git diff --check` 的完整替代，属于本轮的已知
-  限制。
-- 用本机已安装的 Pi（0.85.1）核对了 `package.json` 的 `pi.skills` manifest
-  能被正确解析。方法：在独立的临时目录里跑
-  `pi install <本仓库路径> -l -a` 完成一次隔离的项目级 package 安装（只写入
-  临时目录自己的 `.pi/settings.json`，未触碰全局配置或本仓库），再直接调用
-  `pi` CLI 自身源码里的 `DefaultResourceLoader`（与真实 CLI 启动时相同的
-  代码路径）对该临时项目做 `reload()` + `getSkills()`。
-  - 用真实的本机 `agentDir`（已装有一份手工同步的同名 Skill）探测时，
-    manifest 指向的 Skill 被正确解析、命名为
-    `project-development-orchestrator`，但在最终列表里以“collision”
-    诊断的 loser 身份出现——因为 user-scope 已有同名同内容 Skill 优先命中，
-    这是 Pi 的正常去重/优先级规则，不是打包缺陷；collision 诊断本身反而
-    证明 manifest 路径被成功发现和解析。
-  - 用一个空的 `agentDir`（模拟没有预装该 Skill 的干净机器）重新探测，
-    manifest 指向的 Skill 被正确解析且没有任何 diagnostics，确认在没有
-    本机既有安装冲突的环境下，Git package 安装能让 Pi 干净发现该 Skill。
-  - 两次探测用的临时目录和脚本均在验证后删除，未污染全局或本仓库配置。
+  10 个跨进程写锁场景通过。
+- 三个 wrapper、共享 helper、helper 测试、写锁及 fixture 的 `node --check` 通过。
+- `git diff --check` 通过；全部未跟踪发布文件也分别通过空白/冲突标记检查。
+- 三个 wrapper 均有 >1 MiB 输出回归：不再 ENOBUFS，不错报执行器不可用，完整
+  证据落盘，内存捕获有界；helper 另覆盖短写、零写、open/setup 和 stdout/stderr
+  流错误。
+- 使用 PATH 中独立 `/opt/homebrew/bin/codex` 0.155.1 和第三方 provider 的
+  `gpt-5.6-terra` 完成最终真实只读探针，返回 `codex-stream-error-probe-ok`，
+  调用前后 Git 状态一致。
+- `npm pack --dry-run --json`：候选包 `pi-project-orchestrator-0.3.0.tgz`，32 个文件，
+  三个 wrapper、共享 helper、Codex 参考文档和测试均在清单中。
+- 在隔离 Git 项目和空 agent 目录中，通过 Pi 0.85.1 `DefaultResourceLoader` 精确
+  发现一个当前候选 `project-development-orchestrator`，无 diagnostics。
 
-## 未解决问题 / 未验证项
+## 独立复审
 
-- 尚未创建/推送 `v0.2.0` tag，因此 README/安装指南中的
-  `pi install git:github.com/stones-hub/pi-project-orchestrator@v0.2.0` 命令
-  本身未在真实网络环境跑通；这需要在获得 commit/push/tag 授权之后才能验证。
-- 未做真实 Pi 新项目端到端验收（讨论 → 调查 → 授权编码 → Agent 编码 → Pi
-  diff/测试 → 本机候选启动和业务验收 → 复审/窄修 → HANDOVER 续接）。
+- Cursor 两次只读复审未形成完整最终结论，但暴露了 PATH 空段线索；该问题随后
+  修复并有回归测试。
+- Codex 使用全新 `review` 会话完成多轮独立只读复审，依次发现并推动关闭：PATH
+  裸回退/相对目录、`--argv-prefix` 注入、`spawnSync` 大输出丢证据、短写、spawn 后
+  open 失败、无命令特殊分支锁泄漏、stdout/stderr 未处理 `error` 等问题。
+- 最终复审未发现新的源码级发布阻断；它因只读沙箱不能创建 Vitest/npm 临时文件，
+  无法自行运行测试，但明确确认所有已知实现阻断项静态关闭。测试、打包、真实探针
+  和 Skill 发现已由 Pi 在真实可写开发环境独立完成，故不构成候选阻断。
+
+## 剩余风险
+
+- Codex JSONL 成功事件没有可靠实际模型字段，摘要 `model` 保持 `null`；只能记录
+  请求模型，不能声称响应证明了真实模型。
+- Codex CLI 后续版本可能改变 argv 或 JSONL 事件形状；当前真实验证基于 0.155.1。
+- npm pack 提示未提供 `.npmignore`，当前按 `.gitignore` 打包；实际 32 文件清单已
+  核对正确，因此不是阻断项。
+- 尚未 commit、push 或创建 `v0.3.0` tag；README/安装指南中的 tag 安装命令只有
+  tag 推送后才可用。
 
 ## 下一步
 
-1. 用户复核本次公开发布打包改动（README、安装指南、LICENSE、CHANGELOG、
-   `package.json` manifest、`docs/design.md` 结构说明、本文件）。
-2. 复核通过后，由用户分别授权 commit、push 和创建 `v0.2.0` tag。
-3. tag 推送后，实际执行一次
-   `pi install git:github.com/stones-hub/pi-project-orchestrator@v0.2.0`
-   做真实网络安装验收，确认 Pi 能发现并加载 `project-development-orchestrator`
-   Skill。
-4. 在一个新的测试项目中走完整“接入 → 讨论 → 只读调查 → 授权编码 → 编码 →
-   Pi diff/测试 → 本机候选启动和业务验收 → 复审/窄修 → 交接续接”流程。
+1. 用户复核候选并单独授权 commit。
+2. commit 后核对候选 SHA，再单独授权 push。
+3. push 后单独授权创建并推送 `v0.3.0` annotated tag。
+4. tag 推送后执行真实 Git package 安装验收。
 
 ## 执行器会话信息
 
-本次公开发布打包（含本轮两次窄修）由 Pi 通过已安装 Skill 的
-`scripts/run-claude --mode code` 调用 Claude Code 执行，并在窄修轮次中
-resume 同一会话（公开 HANDOVER 不写本机具体安装绝对路径）：
+Cursor 修复任务：`.pi/tasks/fix-v030-review-blockers.md`
 
-- 请求模型：`sonnet`
-- 响应中实际证明使用的模型：`claude-sonnet-5`
-- session_id：`6b401440-2b24-4d8e-ada8-3124886b1630`
-- 基线：本仓库当前没有任何 Git commit（无 HEAD），本次改动全部落在未跟踪
-  文件上；候选状态就是这些未跟踪文件本身，commit/push/tag 均未执行。
+- executor：Cursor
+- 请求模型：`auto`
+- 响应证明的真实模型：未证明
+- session_id：`216b693c-e297-44d9-b804-53cc1223c680`
+- 基线：HEAD `55108f0b1d0bfd34590e37816ee95eb18b839114` 加未提交 v0.3.0 候选
+
+最终 Codex 独立复审：
+
+- executor：Codex
+- 请求模型：`gpt-5.6-terra`
+- 响应证明的真实模型：未证明
+- session_id：`01a0bdd5-bcc4-7ed2-9834-608730d3c0a8`
+- 结论：所有已知源码级阻断项关闭；只读环境无法自行重跑测试

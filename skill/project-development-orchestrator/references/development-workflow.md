@@ -20,9 +20,9 @@
 scripts/run-claude --mode investigate --model <model> --prompt "<具体问题>" --evidence-file <仓库外路径>
 ```
 
-用户指定 Cursor 时可换 `run-cursor`。调查模式不得修改源码工作区；Pi 在调用前后
-都运行 `git status --porcelain` 核对。证据文件默认放仓库外；确需放项目内时，
-必须获批且目录已加入 `.gitignore`。
+用户指定 Cursor 或 Codex 时可换 `run-cursor` 或 `run-codex`。调查模式不得修改
+源码工作区；Pi 在调用前后都运行 `git status --porcelain` 核对。证据文件默认放
+仓库外；确需放项目内时，必须获批且目录已加入 `.gitignore`。
 
 ## 3. 方案、授权和任务书
 
@@ -39,12 +39,11 @@ scripts/run-claude --mode investigate --model <model> --prompt "<具体问题>" 
 scripts/run-claude --mode code --model <model> --prompt "<任务书路径和执行要求>" --evidence-file <仓库外路径> [--resume <session_id>]
 ```
 
-- 默认 Claude Code；只有用户明确指定时用 Cursor 编码。
+- 默认 Claude Code；用户明确指定时用 Cursor 或 Codex 编码。
 - 同一真实工作区一次只运行一个写权限编码 Agent；不同工作区允许并行。
-  `run-claude`/`run-cursor` 的 `code` 模式通过真实路径对应的共用写锁执行该约束，
-  因此 Cursor 与 Claude 也不能交叉写同一工作区。`investigate`/`review` 不占写锁。
-  不得额外使用全局 `pgrep cursor-agent` 或 `pgrep claude` 门禁，否则会错误阻塞
-  其他项目。
+  `run-claude`/`run-cursor`/`run-codex` 的 `code` 模式通过真实路径对应的共用写锁
+  执行该约束，因此三种执行器不能交叉写同一工作区。`investigate`/`review` 不占
+  写锁。不得额外使用全局进程查找门禁，否则会错误阻塞其他项目。
 - 仅当同一执行器、同一任务、Git 基线未变化时续接；独立复审禁止 resume。
 - wrapper 返回 `success` 只表示执行器调用完成，不表示候选验收通过。
 - `failure`、`blocked` 或 `executor_unavailable` 都要停止并报告；不得静默重试或

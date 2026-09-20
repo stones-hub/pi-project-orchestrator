@@ -20,18 +20,17 @@ Pi 原生支持从 Git 仓库安装 package，`package.json` 已声明
 固定 tag 安装（全局，写入 `~/.pi/agent/settings.json`）：
 
 ```bash
-pi install git:github.com/stones-hub/pi-project-orchestrator@v0.2.0
+pi install git:github.com/stones-hub/pi-project-orchestrator@v0.3.0
 ```
 
 只在当前项目生效（写入项目 `.pi/settings.json`，不改全局配置）：
 
 ```bash
-pi install git:github.com/stones-hub/pi-project-orchestrator@v0.2.0 -l
+pi install git:github.com/stones-hub/pi-project-orchestrator@v0.3.0 -l
 ```
 
-> 以上命令假设目标仓库已经存在 `v0.2.0` 这个 tag。tag 需要在候选验收通过、
-> 用户授权 commit/push 之后才会存在；执行前请先确认该 tag 确实存在，或改用
-> 下方的“不写入 settings 的试用方式”“本地开发方式”。
+> 以上命令将在 `v0.3.0` tag 创建并推送后可用。tag、commit、push 分别需要授权；
+> 发布前可改用下方的“不写入 settings 的试用方式”或“本地开发方式”。
 
 安装完成后：
 
@@ -122,13 +121,30 @@ npm uninstall -g @earendil-works/pi-coding-agent
 
 ## 3. 核对编码执行器
 
-Skill 依赖已安装并登录的 `claude`，以及用户选择使用 Cursor 时的
-`cursor-agent`。安装前可分别运行只读探针：
+Skill 依赖已安装并登录的 `claude`；用户选择其他执行器时，还需要对应的
+`cursor-agent` 或 `codex`。Codex 推荐独立安装：
+
+```bash
+npm install -g @openai/codex
+```
+
+`run-codex` 优先使用 PATH 中的独立 CLI。Codex 使用官方服务时按官方方式登录；
+使用第三方中转站时不要求 Codex 官方登录，只需按该服务要求配置 provider、API Key
+和模型。macOS ChatGPT/Codex App 内置 CLI 仅在 PATH 中找不到 `codex` 时作为兼容
+回退，无需为它额外创建软链接。安装后可分别运行只读探针：
 
 ```bash
 claude -p "reply with the single word: ack" --permission-mode plan --permission-prompts none --tools Read,Glob,Grep --disallowedTools "mcp__*" --strict-mcp-config --output-format json --model sonnet
 
 cursor-agent -p "reply with the single word: ack" --trust --mode plan --output-format json --model auto
+
+codex --sandbox read-only --ask-for-approval never --cd "$PWD" --model <model> exec --json "reply with the single word: ack"
+```
+
+如果 `codex` 不在 PATH，但已安装 macOS ChatGPT/Codex App，Codex 探针改用：
+
+```bash
+'/Applications/ChatGPT.app/Contents/Resources/codex' --sandbox read-only --ask-for-approval never --cd "$PWD" --model <model> exec --json "reply with the single word: ack"
 ```
 
 探针失败时先解决登录、安装或网络问题；不要静默切换执行器。
@@ -144,7 +160,7 @@ cursor-agent -p "reply with the single word: ack" --trust --mode plan --output-f
   ```text
   $ pi list
   User packages:
-    git:github.com/stones-hub/pi-project-orchestrator@v0.2.0
+    git:github.com/stones-hub/pi-project-orchestrator@v0.3.0
       $HOME/.pi/agent/git/github.com/stones-hub/pi-project-orchestrator
   ```
 
@@ -192,7 +208,7 @@ cp <PKG_CHECKOUT>/skill/project-development-orchestrator/templates/task.md .pi/t
 2. 讨论并将方案写入 `docs/`；
 3. 编码 Agent 只读调查；
 4. 用户确认方案并授权编码；
-5. Claude Code 编码和自测；
+5. Claude Code（默认）或用户指定的 Cursor / Codex 编码和自测；
 6. Pi 检查完整 diff、重跑测试；
 7. Pi 重新构建并在本机运行候选，从正式入口完成业务验收；
 8. 必要时独立复审、窄修和重新验收；

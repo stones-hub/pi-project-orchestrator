@@ -16,7 +16,7 @@
 
 # 执行器与授权
 
-- 执行器：`TODO`（默认 Claude Code；用户指定时 Cursor）
+- 执行器：`TODO`（默认 Claude Code；用户指定时 Cursor 或 Codex）
 - 请求模型：`TODO`
 - 编码授权：`TODO`（未获得 / 已获得；方案确认不等于编码授权）
 - 权限范围：`TODO`

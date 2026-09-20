@@ -11,6 +11,7 @@ const { acquireWorkspaceWriteLock, lockPathForWorkspace } = require("./workspace
 const scripts = __dirname;
 const cursor = path.join(scripts, "run-cursor");
 const claude = path.join(scripts, "run-claude");
+const codex = path.join(scripts, "run-codex");
 const fixture = path.join(scripts, "fake-executor.test-fixture.js");
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-workspace-lock-test-"));
 const lockDir = path.join(root, "locks");
@@ -21,8 +22,9 @@ fs.mkdirSync(workspaceA);
 fs.mkdirSync(workspaceB);
 
 function args(wrapper, mode, workspace, evidence) {
+  // --command is an explicit trusted override pointing at the local fixture shim.
   const base = [wrapper, "--mode", mode, "--prompt", "test", "--model", "fake", "--evidence-file", evidence,
-    "--workspace", workspace, "--command", process.execPath, "--argv-prefix", fixture];
+    "--workspace", workspace, "--command", fixture];
   return base;
 }
 
@@ -74,6 +76,10 @@ async function main() {
   assert.equal(result.status, 2);
   assert.match(JSON.parse(result.stdout).reason, /cursor/);
 
+  result = run(codex, "code", workspaceA, evidence("cross-codex"));
+  assert.equal(result.status, 2);
+  assert.match(JSON.parse(result.stdout).reason, /cursor/);
+
   result = run(cursor, "code", workspaceB, evidence("different"));
   assert.equal(result.status, 0);
 
@@ -120,7 +126,7 @@ async function main() {
   assert.equal(JSON.parse(result.stdout).status, "executor_unavailable");
   assert.equal(fs.existsSync(lockA), false);
 
-  console.log("workspace write lock tests: 9 scenarios passed");
+  console.log("workspace write lock tests: 10 scenarios passed");
 }
 
 main().catch((err) => {

@@ -112,10 +112,17 @@ describe("public release packaging", () => {
     }
   });
 
-  it("CHANGELOG.md describes v0.2.0 without claiming a tag/release is already published", () => {
+  it("CHANGELOG.md has an exact heading for the current package version without claiming a release is published", () => {
+    const version = JSON.parse(read("package.json")).version as string;
+    const tag = `v${version}`;
     const changelog = read("CHANGELOG.md");
-    expect(changelog).toMatch(/v0\.2\.0/);
+    expect(changelog).toMatch(new RegExp(`^## \\[${tag.replace(/\./g, "\\.")}\\] `, "m"));
     expect(changelog).not.toMatch(/已(经)?发布/);
+
+    for (const file of ["README.md", "docs/installation-guide.md"]) {
+      const content = read(file);
+      expect(content, `${file} should mention candidate tag ${tag}`).toContain(tag);
+    }
   });
 
   it("public deliverable files contain no personal absolute paths", () => {

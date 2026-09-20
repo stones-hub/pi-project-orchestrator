@@ -3,12 +3,42 @@
 本文件记录 `pi-project-orchestrator` 各版本的内容。格式参考
 [Keep a Changelog](https://keepachangelog.com/)。
 
-## [v0.2.0] — 发布候选
+## [v0.3.0] — 2026-09-20
 
-> **状态说明**：本仓库当前没有任何 Git commit、tag 或 GitHub Release；下面的
-> 条目描述的是达到 v0.2.0 目标的候选内容，用于打包和复审，不代表
-> `git:github.com/stones-hub/pi-project-orchestrator@v0.2.0` 已经可以安装。
-> 该 tag 需要在候选通过验收、经用户授权 commit/push 后才会存在。
+### 新增
+
+- OpenAI Codex CLI 成为与 Claude Code、Cursor 同级的可选执行器，支持调查、
+  编码、窄修和独立复审。
+- `scripts/run-codex`：封装 Codex 非交互 `exec --json` / `exec resume`，按模式
+  使用 `read-only` 或 `workspace-write` 沙箱，输出结构化摘要并保存 stdout/stderr
+  证据。
+- `references/codex.md` 与 `tests/run-codex.test.ts`：记录 Codex CLI 0.155.1
+  参数/JSONL 契约和 fake-CLI 契约测试。
+
+### 变更
+
+- 三个执行器的 `code` 模式共用现有按真实工作区划分的写锁；模板、README、设计
+  与安装指南同步支持 Codex。
+- Codex CLI 发现优先使用 `CODEX_COMMAND` / `--command`（调用方显式信任覆盖）和
+  PATH 中绝对目录下的独立 CLI；忽略空段与相对 PATH 项，失败时不回退裸命令名；
+  macOS App 内置 CLI 仅作为明确回退。
+- 三个 wrapper 移除生产 `--argv-prefix` 测试缝；共用异步 `spawn-with-evidence`
+  边写证据文件（完整写循环、spawn 前打开证据 FD），内存解析缓冲固定 1 MiB/流，
+  超出判 `failure` 并保留完整落盘证据，避免大输出 ENOBUFS 错报
+  `executor_unavailable`。
+
+### 验证
+
+- 已通过 PATH 中独立安装的 `codex-cli 0.155.1`，使用第三方 provider 的
+  `gpt-5.6-terra` 完成 `run-codex --mode investigate` 真实只读探针；PATH 加固后
+  重新探针仍返回预期结果，调用前后 Git 工作区状态一致。
+
+### 已知限制
+
+- Codex JSONL 终态事件未提供可证明的实际模型字段，wrapper 摘要中的 `model`
+  保持为 `null`，不能用请求模型名冒充响应证据。
+
+## [v0.2.0] — 2026-09-20
 
 ### 新增
 
@@ -39,12 +69,7 @@
   公开交接状态说明。
 - `docs/design.md` 的 Skill 目录结构说明补齐写锁实现及其测试文件。
 
-### 未验证 / 已知限制
+### 已知限制
 
-- 尚未创建/推送 Git tag，因此未在真实网络环境验证
-  `pi install git:github.com/stones-hub/pi-project-orchestrator@v0.2.0`
-  这条命令本身；只验证了 `package.json` 的 `pi.skills` manifest 能被本机
-  已安装的 Pi（0.85.1）正确解析并发现 `project-development-orchestrator`
-  Skill（见 `HANDOVER.md`）。
 - 未做真实 Pi 新项目端到端验收（讨论 → 调查 → 编码 → diff/测试 → 本机
   候选验收 → Git 部署）。

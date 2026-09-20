@@ -1,9 +1,9 @@
 # pi-project-orchestrator
 
 一个轻量 Pi Skill：Pi 在具体 Git 项目中与用户讨论并固化方案，默认调用 Claude
-Code、按用户指定调用 Cursor 做调查/编码/复审；编码后 Pi 独立检查 diff、重跑
-测试，并把当前候选按项目真实方式在本机运行起来，从正式入口完成业务验收；候选
-通过后，再分别获批 commit、push 和目标机 Git 部署。
+Code，也可按用户指定调用 Cursor 或 Codex 做调查/编码/复审；编码后 Pi 独立检查
+diff、重跑测试，并把当前候选按项目真实方式在本机运行起来，从正式入口完成业务
+验收；候选通过后，再分别获批 commit、push 和目标机 Git 部署。
 
 它不是研发平台，不含状态机、权限数据库、Token 统计、自动测试平台或自动部署
 平台，也不强制项目使用 Docker。项目文档和状态全部保存在项目仓库，不以
@@ -19,7 +19,16 @@ Obsidian 为真源。
   声明的 `engines` 为准）。
 - 已安装并登录 [Pi](https://github.com/earendil-works/pi)（`@earendil-works/pi-coding-agent`，npm 包名同上；此链接取自当前安装包 `package.json` 中声明的 `repository` 字段），建议固定版本安装，不用 `@latest`。
 - 已安装并登录 Claude Code CLI（`claude`），这是默认执行器。
-- 如需使用 Cursor 作为执行器或独立复审器，另外安装并登录 `cursor-agent`。
+- 如需使用 Cursor，另外安装并登录 `cursor-agent`。
+- 如需使用 OpenAI Codex，推荐全局安装独立 CLI：
+
+  ```bash
+  npm install -g @openai/codex
+  ```
+
+  wrapper 优先使用 PATH 中的独立 `codex`；macOS ChatGPT/Codex App 内置 CLI 只在
+  PATH 找不到时作为兼容回退。使用官方服务时按官方方式登录，使用第三方中转站时
+  配置该服务要求的 API Key 即可。
 
 Skill 本身不是操作系统级沙箱，也不代管你的 Pi 全局 `AGENTS.md`/`settings.json`；
 真正的安全边界见下方[安全边界](#安全边界)。
@@ -27,18 +36,17 @@ Skill 本身不是操作系统级沙箱，也不代管你的 Pi 全局 `AGENTS.m
 ## 安装（推荐：固定 tag 的 Git 安装）
 
 ```bash
-pi install git:github.com/stones-hub/pi-project-orchestrator@v0.2.0
+pi install git:github.com/stones-hub/pi-project-orchestrator@v0.3.0
 ```
 
 只在当前项目生效、不改全局配置：
 
 ```bash
-pi install git:github.com/stones-hub/pi-project-orchestrator@v0.2.0 -l
+pi install git:github.com/stones-hub/pi-project-orchestrator@v0.3.0 -l
 ```
 
-> 以上命令假设目标仓库已经存在 `v0.2.0` 这个 tag。本仓库交付本候选时可能
-> 尚未打上该 tag（打 tag 需要单独授权），执行安装前请先确认该 tag 确实存在；
-> 如果只是想先看看 Skill 内容，请用下面的“试用”方式。
+> 以上命令将在 `v0.3.0` tag 创建并推送后可用。打 tag、push 均需单独授权；
+> 发布前试用当前候选请使用下面的“试用”方式。
 
 安装完成后确认包已注册：
 
@@ -101,7 +109,7 @@ pi remove git:github.com/stones-hub/pi-project-orchestrator
    `~/.pi/agent/skills/project-development-orchestrator/templates/`；详见
    `docs/installation-guide.md` 第 4 节。
 3. 与 Pi 讨论方案，方案写入项目 `docs/`，用户明确确认后再授权编码。
-4. Pi 生成任务书，委派 Claude Code（默认）或用户指定的 Cursor 编码。
+4. Pi 生成任务书，委派 Claude Code（默认）或用户指定的 Cursor / Codex 编码。
 5. Pi 检查完整 diff、重跑测试；候选改变运行行为时，在本机重新构建/启动并
    从正式入口完成业务验收。
 6. 分别获批后，Pi 才执行 commit、push 和目标机 Git 部署。
@@ -111,13 +119,13 @@ pi remove git:github.com/stones-hub/pi-project-orchestrator
 
 ## 安全边界
 
-- Skill 和两个 wrapper（`run-claude`/`run-cursor`）不是操作系统级沙箱，不能
-  拦截执行器内部所有 shell 或网络调用。真正边界来自项目自身
+- Skill 和三个 wrapper（`run-claude`/`run-cursor`/`run-codex`）不是操作系统级
+  沙箱，不能拦截执行器内部所有 shell 或网络调用。真正边界来自项目自身
   `AGENTS.md`、执行器自身的权限/沙箱、开发环境不提供生产凭证，以及用户对
   敏感动作的逐项确认。
 - Pi 默认不直接编写正式业务代码、正式测试、迁移或部署配置，这些交给
-  Claude Code 或 Cursor；Pi 负责讨论、任务书、diff 检查、测试重跑、本机
-  候选验收和 Git 部署编排。
+  Claude Code、Cursor 或 Codex；Pi 负责讨论、任务书、diff 检查、测试重跑、
+  本机候选验收和 Git 部署编排。
 - commit、push、部署、生产访问和切换编码执行器分别授权，互不包含；方案
   确认不等于编码授权。
 - 不自动 fallback、重试、commit、push 或部署；执行器失败或结果不明确时
@@ -125,8 +133,8 @@ pi remove git:github.com/stones-hub/pi-project-orchestrator
 - 执行器自报不构成完成证据，Pi 必须检查 Git 差异、重跑测试，并对改变运行
   行为的候选做本机业务验收。
 - 同一真实工作区同一时刻只允许一个有写权限的编码 Agent（`run-claude`/
-  `run-cursor` 在 `code` 模式共用按工作区路径划分的写锁）；不同工作区互不
-  阻塞。
+  `run-cursor`/`run-codex` 在 `code` 模式共用按工作区路径划分的写锁）；不同
+  工作区互不阻塞。
 - 无法取得的验证证据必须写成“受阻/未验证”，不得用单元测试、进程存活或
   执行器自报替代。
 
@@ -144,7 +152,7 @@ node --test skill/project-development-orchestrator/scripts/workspace-write-lock.
   中 `pi.skills` manifest 指向的目录。
 - `docs/design.md`：完整产品和流程设计。
 - `docs/installation-guide.md`：固定版本安装、升级、项目接入与卸载。
-- `tests/`：两个薄 wrapper 的 fake-CLI 契约测试。
+- `tests/`：三个薄 wrapper 的 fake-CLI 契约测试。
 - `LICENSE`：MIT。
 - `CHANGELOG.md`：版本变更记录。
 

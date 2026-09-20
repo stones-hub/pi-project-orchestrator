@@ -3,10 +3,10 @@
 ## 一、项目定位
 
 本仓库交付一个轻量 Pi Skill：用户在具体 Git 项目中与 Pi 持续讨论方案；Pi 委派
-Claude Code（默认）或用户指定的 Cursor 做源码调查、正式编码和必要复审；编码
-结束后，Pi 独立检查代码、重跑测试、在本机运行当前候选并从正式入口完成业务验收；
-候选通过后，再分别获得 commit、push 和部署授权，通过 Git 将固定 SHA 更新到
-目标机器并验证。
+Claude Code（默认）或用户指定的 Cursor / Codex 做源码调查、正式编码和必要复审；
+编码结束后，Pi 独立检查代码、重跑测试、在本机运行当前候选并从正式入口完成业务
+验收；候选通过后，再分别获得 commit、push 和部署授权，通过 Git 将固定 SHA 更新
+到目标机器并验证。
 
 项目方案、规则、部署方法、任务书和进度只保存在项目仓库。Obsidian 中的探索
 记录不作为开发或验收真源。
@@ -15,7 +15,7 @@ Claude Code（默认）或用户指定的 Cursor 做源码调查、正式编码�
 
 ### 1. 指挥编码 Agent
 
-- 默认 Claude Code；用户明确指定时 Cursor。
+- 默认 Claude Code；用户明确指定时 Cursor 或 Codex。
 - 方案转成有 Risk、Scope、Verify 的任务书后再委派。
 - 执行器失败时如实说明，不静默重试或换人。
 - 只有同一执行器、同一任务、Git 基线未变化时续接原会话。
@@ -70,7 +70,8 @@ Git 的交付方式。工作区不干净、分支不符、无法 `git pull --ff-
 | 用户 | 业务方向、方案确认、编码授权、执行器切换、commit、push、部署和生产访问授权 |
 | Pi | 讨论、任务、执行器编排、diff、测试、本机业务验收、复审、Git 部署和交接 |
 | Claude Code | 默认执行器：调查、正式编码、测试、窄修 |
-| Cursor | 用户指定时编码，或作为独立复审器 |
+| Cursor | 用户指定时调查、编码、窄修或独立复审 |
+| Codex | 用户指定时调查、编码、窄修或独立复审 |
 | 项目仓库 | 方案、规则、部署方法、任务书和真实进度的唯一真源 |
 
 ## 四、项目仓库约定
@@ -100,10 +101,10 @@ Git 的交付方式。工作区不干净、分支不符、无法 `git pull --ff-
 
 1. 进入项目，读取控制文件和 Git 真实状态。
 2. 与用户讨论目标、方案、范围和验收场景。
-3. 必要时委派 Claude Code/Cursor 只读调查，前后核对工作区未改。
+3. 必要时委派 Claude Code、Cursor 或 Codex 只读调查，前后核对工作区未改。
 4. 把方案写进 `docs/`，等待用户确认和编码授权。
 5. 生成任务书，提前固定测试与本机黑盒验收方法。
-6. 默认委派 Claude Code 编码；Cursor 仅按用户指定编码。
+6. 默认委派 Claude Code 编码；Cursor / Codex 仅按用户指定编码。
 7. Pi 检查完整 diff，重跑自动化测试。
 8. Pi 从当前工作区重建候选，在本机启动并执行业务验收。
 9. 失败则保留证据：方案问题回讨论，实现问题交原 Agent 窄修，环境问题标受阻。
@@ -153,6 +154,7 @@ project-development-orchestrator/
 │   ├── development-workflow.md
 │   ├── claude-code.md
 │   ├── cursor.md
+│   ├── codex.md
 │   ├── testing-and-review.md
 │   └── git-deployment.md
 ├── templates/
@@ -164,19 +166,22 @@ project-development-orchestrator/
 └── scripts/
     ├── run-claude
     ├── run-cursor
+    ├── run-codex
+    ├── spawn-with-evidence.js
+    ├── spawn-with-evidence.test.js
     ├── workspace-write-lock.js
     ├── workspace-write-lock.test.js
     └── fake-executor.test-fixture.js
 ```
 
-两个 wrapper 只处理 CLI 参数差异、工作目录、模式、模型、结构化结果、
+三个 wrapper 只处理 CLI 参数差异、工作目录、模式、模型、结构化结果、
 session_id、原始输出证据，以及同一真实工作区的跨执行器写互斥；不管理状态、
 授权、测试、部署、任务或 Token，不自动 fallback/重试。`workspace-write-lock.js`
-实现按工作区真实路径划分的写锁，供 `run-claude`/`run-cursor` 在 `code` 模式下
-共用：同一工作区同一时刻只允许一个有写权限的编码 Agent 持有锁，只读调用
-（`investigate`/`review`）不占锁，不同工作区互不阻塞；`workspace-write-lock.test.js`
-覆盖同工作区互斥、跨工作区不互斥、只读不占锁、持锁进程退出/崩溃后的锁回收等
-场景。
+实现按工作区真实路径划分的写锁，供 `run-claude`/`run-cursor`/`run-codex` 在
+`code` 模式下共用：同一工作区同一时刻只允许一个有写权限的编码 Agent 持有锁，
+只读调用（`investigate`/`review`）不占锁，不同工作区互不阻塞；
+`workspace-write-lock.test.js` 覆盖同工作区互斥、跨工作区不互斥、只读不占锁、
+持锁进程退出/崩溃后的锁回收等场景。
 
 ## 十、明确不建设
 

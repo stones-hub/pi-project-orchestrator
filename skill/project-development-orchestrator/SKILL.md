@@ -2,8 +2,8 @@
 name: project-development-orchestrator
 description: >
   Pi 作为具体 Git 项目的研发主 Agent 时使用：与用户讨论并固化方案，委派
-  Claude Code（默认）或 Cursor 调查/编码/复审，独立检查代码和测试，在本机
-  运行当前候选做业务验收，并在分别获批后通过 Git 部署到目标机器。
+  Claude Code（默认）、Cursor 或 Codex 调查/编码/复审，独立检查代码和测试，
+  在本机运行当前候选做业务验收，并在分别获批后通过 Git 部署到目标机器。
 ---
 
 # Project Development Orchestrator
@@ -22,14 +22,14 @@ description: >
 - Pi 负责方案讨论、任务书、执行器调用、完整 diff 检查、测试重跑、本机候选
   运行验收、复审编排、Git 部署编排和 `HANDOVER.md`。
 - Pi 默认不直接修改正式业务代码、正式测试、数据库迁移或部署配置；这些交给
-  Claude Code（默认）或用户指定的 Cursor。Pi 可以维护 `docs/`、
+  Claude Code（默认），或用户指定的 Cursor / Codex。Pi 可以维护 `docs/`、
   `HANDOVER.md`、`.pi/tasks/` 和项目协作说明。
 - 方案确认不等于编码授权。用户明确同意开始编码后，才可委派写代码。
 - commit、push、部署、生产访问和切换编码执行器分别授权，互不包含。
 - 执行器失败或结果不明确时停止并说明，不静默重试、不自动换执行器。
 - 同一真实工作区同一时刻只运行一个有写权限的编码 Agent；不同工作区可以并行。
-  `run-claude` 与 `run-cursor` 在 `code` 模式共用按工作区真实路径划分的写锁，
-  禁止用全局 `pgrep cursor-agent`/`pgrep claude` 把整台机器串行化。
+  `run-claude`、`run-cursor` 与 `run-codex` 在 `code` 模式共用按工作区真实路径
+  划分的写锁，禁止用全局进程查找把整台机器串行化。
 - 执行器自报不构成完成证据；Pi 必须检查 Git 差异、重跑测试，并对改变运行
   行为的候选执行本机运行和黑盒业务验收。
 - 本机候选验收是开发验证，不是目标机器部署；但若需安装全局软件、改系统
@@ -47,8 +47,9 @@ description: >
 4. **生成任务书**：从 `templates/task.md` 生成 `.pi/tasks/<task-id>.md`，写清
    Risk、Scope、Verify、基线、执行器、允许/禁止范围、测试和本机业务验收。
 5. **委派编码**：默认 `scripts/run-claude --mode code`；用户指定时用
-   `scripts/run-cursor --mode code`。只有同一执行器、同一任务、Git 基线未变化
-   三项同时满足才允许 `--resume`；独立复审一律新会话。
+   `scripts/run-cursor --mode code` 或 `scripts/run-codex --mode code`。只有同一
+   执行器、同一任务、Git 基线未变化三项同时满足才允许 `--resume`；独立复审
+   一律新会话。
 6. **Pi 独立验收**：检查 `git status` 和完整 `git diff`，对照方案和任务书，
    重新运行必要测试。只要候选改变程序运行行为，还要重新构建/安装当前候选，
    按项目真实方式在本机启动，从正式入口走核心业务场景，检查最终结果和日志，
@@ -71,15 +72,17 @@ description: >
 - Git 部署、目标机核对和失败处置：`references/git-deployment.md`
 - Claude Code 参数和 JSON 契约：`references/claude-code.md`
 - Cursor 参数和 JSON 契约：`references/cursor.md`
+- Codex 参数和 JSONL 契约：`references/codex.md`
 - 新项目起点：`templates/AGENTS.md`、`templates/CLAUDE.md`、
   `templates/HANDOVER.md`、`templates/task.md`、`templates/deployment.md`
 
 ## Wrapper 定位
 
-`scripts/run-claude` 和 `scripts/run-cursor` 只处理 CLI 参数差异、工作目录、模式、
-模型、结构化结果、会话续接、原始输出证据，以及同一真实工作区的跨执行器写互斥。
-只读调用不占写锁，不同工作区互不阻塞。它们不管理项目状态、授权、测试、
-部署、任务或 Token，也不自动 fallback、重试、commit、push 或部署。
+`scripts/run-claude`、`scripts/run-cursor` 和 `scripts/run-codex` 只处理 CLI 参数
+差异、工作目录、模式、模型、结构化结果、会话续接、原始输出证据，以及同一真实
+工作区的跨执行器写互斥。只读调用不占写锁，不同工作区互不阻塞。它们不管理项目
+状态、授权、测试、部署、任务或 Token，也不自动 fallback、重试、commit、push
+或部署。
 
 ## 诚实的安全边界
 

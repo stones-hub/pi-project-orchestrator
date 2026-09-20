@@ -40,10 +40,10 @@ claude -p "<prompt>" \
   --model <model>
 ```
 
-- wrapper 启动进程前会按 `realpath(workspace)` 获取与 Cursor 共用的写锁；同一
-  真实工作区已有任一写 Agent 时返回 `blocked`，不同工作区不互相阻塞。锁在
+- wrapper 启动进程前会按 `realpath(workspace)` 获取与 Cursor、Codex 共用的写锁；
+  同一真实工作区已有任一写 Agent 时返回 `blocked`，不同工作区不互相阻塞。锁在
   子进程成功、失败或启动报错后都会释放，死 PID 遗留锁可恢复。只读模式不占锁。
-  禁止在调用外层再用全局 `pgrep claude` 或 `pgrep cursor-agent` 判断并发。
+  禁止在调用外层再用全局进程查找判断并发。
 - 使用显式 `--allowedTools` 白名单，而不是
   `--dangerously-skip-permissions`——后者会绕过 Claude Code 自身的权限系统。
 - `--permission-mode acceptEdits`：允许在白名单工具范围内自动应用编辑，权限
@@ -89,11 +89,16 @@ Code CLI 的 JSON 响应顶层（与 `session_id`/`result`/`is_error`/`usage` �
 
 判定成功不能只看 `session_id` 是否存在：JSON 解析失败、缺 `session_id`、或
 `is_error`/`result` 二者任一缺失/类型不对，都判定为 `failure`，绝不当成成功
-静默通过。完整原始 stdout 和 stderr 分别写入 `--evidence-file` 指定路径
-（stdout）及其 `.stderr` 后缀路径（stderr），不管解析是否成功；wrapper 不会把
-原始 stdout/stderr 整段回显，但会把解析后的 `result` 作为结构化字段返回给 Pi，
-因为它是正常调用正文。调用方必须把 `result` 当作模型输出处理，不能向执行器提供
-真实凭证或要求其回显敏感文件。
+静默通过。完整原始 stdout 和 stderr 在子进程启动前即创建证据文件，并边产生边
+写入 `--evidence-file` 指定路径（stdout）及其 `.stderr` 后缀路径（stderr），
+不管解析是否成功；不受 Node `spawnSync` maxBuffer 限制。内存中仅保留每流固定
+1 MiB 解析缓冲；超出时完整证据仍落盘，摘要以 `failure` + 明确 `parseError`
+返回。`executor_unavailable` 仅表示无法启动执行器（如 ENOENT）；执行中失败、
+信号退出或输出解析失败归 `failure`。wrapper 不会把原始 stdout/stderr 整段回显，
+但会把解析后的 `result` 作为结构化字段返回给 Pi，因为它是正常调用正文。
+`--command` 若使用，是调用方显式信任覆盖，不是自动发现；`--argv-prefix` 不被
+接受。调用方必须把 `result` 当作模型输出处理，不能向执行器提供真实凭证或要求其
+回显敏感文件。
 
 ## 会话续接（resume）
 

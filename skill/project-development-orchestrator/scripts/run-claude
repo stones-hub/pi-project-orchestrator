@@ -4,17 +4,17 @@
 /**
  * Thin CLI wrapper around the real `claude` binary: builds the real,
  * locally-verified argv shape (see references/claude-code.md), spawns it,
- * saves the raw stdout JSON to an evidence file, and prints a small summary.
+ * streams raw stdout/stderr to evidence files, and prints a small summary.
  * Not a state machine or security platform: no auto-fallback, no retry, no
  * commit/push/deploy, no credential handling.
  */
 
-const fs = require("node:fs");
-const path = require("node:path");
-const { spawnSync } = require("node:child_process");
 const { acquireWorkspaceWriteLock, canonicalizeWorkspace } = require("./workspace-write-lock");
+const { spawnWithEvidence, captureOverflowParseError } = require("./spawn-with-evidence");
 
 const MODES = new Set(["investigate", "code", "review"]);
+
+class UsageError extends Error {}
 
 function parseArgs(argv) {
   const opts = {
@@ -25,7 +25,6 @@ function parseArgs(argv) {
     resume: null,
     workspace: null,
     command: "claude",
-    argvPrefix: [],
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -49,19 +48,17 @@ function parseArgs(argv) {
         opts.workspace = argv[++i];
         break;
       case "--command":
+        // Explicit caller-trusted override; not automatic discovery.
         opts.command = argv[++i];
         break;
       case "--argv-prefix":
-        opts.argvPrefix.push(argv[++i]);
-        break;
+        throw new UsageError("--argv-prefix is not accepted; use an executable --command shim for tests");
       default:
         throw new UsageError(`unknown argument '${arg}'`);
     }
   }
   return opts;
 }
-
-class UsageError extends Error {}
 
 function validate(opts) {
   if (!opts.mode || !MODES.has(opts.mode)) {
@@ -154,14 +151,18 @@ function parseClaudeOutput(stdout) {
   };
 }
 
-function main(argv) {
+function writeSummary(payload) {
+  process.stdout.write(JSON.stringify(payload) + "\n");
+}
+
+async function main(argv) {
   let opts;
   try {
     opts = parseArgs(argv);
     validate(opts);
   } catch (err) {
     if (err instanceof UsageError) {
-      process.stdout.write(JSON.stringify({ ok: false, status: "blocked", reason: err.message }) + "\n");
+      writeSummary({ ok: false, status: "blocked", reason: err.message });
       return 2;
     }
     throw err;
@@ -171,9 +172,7 @@ function main(argv) {
   try {
     cwd = canonicalizeWorkspace(opts.workspace ?? process.cwd());
   } catch (err) {
-    process.stdout.write(
-      JSON.stringify({ ok: false, status: "blocked", reason: `workspace cannot be resolved: ${String(err.message ?? err)}` }) + "\n",
-    );
+    writeSummary({ ok: false, status: "blocked", reason: `workspace cannot be resolved: ${String(err.message ?? err)}` });
     return 2;
   }
 
@@ -182,62 +181,112 @@ function main(argv) {
     try {
       writeLock = acquireWorkspaceWriteLock(cwd, "claude");
     } catch (err) {
-      process.stdout.write(
-        JSON.stringify({ ok: false, status: "blocked", reason: `workspace write lock failed: ${String(err.message ?? err)}` }) + "\n",
-      );
+      writeSummary({ ok: false, status: "blocked", reason: `workspace write lock failed: ${String(err.message ?? err)}` });
       return 2;
     }
     if (!writeLock.ok) {
-      process.stdout.write(JSON.stringify({ ok: false, status: "blocked", reason: writeLock.reason }) + "\n");
+      writeSummary({ ok: false, status: "blocked", reason: writeLock.reason });
       return 2;
     }
   }
 
-  const argvSuffix = buildArgv(opts);
-  const spawnArgv = [...opts.argvPrefix, ...argvSuffix];
+  const spawnArgv = buildArgv(opts);
   let result;
   try {
-    result = spawnSync(opts.command, spawnArgv, { cwd, encoding: "utf8" });
+    result = await spawnWithEvidence({
+      command: opts.command,
+      argv: spawnArgv,
+      cwd,
+      evidenceFile: opts.evidenceFile,
+    });
   } finally {
     writeLock?.release();
   }
 
-  if (result.error) {
-    process.stdout.write(
-      JSON.stringify({ ok: false, status: "executor_unavailable", reason: String(result.error.message ?? result.error) }) + "\n",
-    );
+  if (result.setupFailed) {
+    writeSummary({
+      ok: false,
+      status: "failure",
+      exitCode: null,
+      sessionId: null,
+      model: null,
+      usage: null,
+      result: null,
+      isError: null,
+      parseError: String(result.error?.message ?? result.error ?? "evidence setup failed"),
+      stdoutEvidenceFile: result.stdoutEvidenceFile,
+      stderrEvidenceFile: result.stderrEvidenceFile,
+    });
+    return 1;
+  }
+
+  if (result.startFailed) {
+    writeSummary({
+      ok: false,
+      status: "executor_unavailable",
+      reason: String(result.error?.message ?? result.error ?? "executor failed to start"),
+      stdoutEvidenceFile: result.stdoutEvidenceFile,
+      stderrEvidenceFile: result.stderrEvidenceFile,
+    });
     return 3;
   }
 
-  fs.mkdirSync(path.dirname(path.resolve(opts.evidenceFile)), { recursive: true });
-  const stdoutEvidenceFile = path.resolve(opts.evidenceFile);
-  const stderrEvidenceFile = `${stdoutEvidenceFile}.stderr`;
-  fs.writeFileSync(stdoutEvidenceFile, result.stdout ?? "", "utf8");
-  fs.writeFileSync(stderrEvidenceFile, result.stderr ?? "", "utf8");
+  if (result.error && !result.startFailed) {
+    // Stream write failure after a started process: treat as failure, keep evidence.
+    writeSummary({
+      ok: false,
+      status: "failure",
+      exitCode: result.status,
+      sessionId: null,
+      model: null,
+      usage: null,
+      result: null,
+      isError: null,
+      parseError: String(result.error.message ?? result.error),
+      stdoutEvidenceFile: result.stdoutEvidenceFile,
+      stderrEvidenceFile: result.stderrEvidenceFile,
+    });
+    return 1;
+  }
+
+  if (result.captureTruncated) {
+    writeSummary({
+      ok: false,
+      status: "failure",
+      exitCode: result.status,
+      sessionId: null,
+      model: null,
+      usage: null,
+      result: null,
+      isError: null,
+      parseError: captureOverflowParseError(result.captureLimit),
+      stdoutEvidenceFile: result.stdoutEvidenceFile,
+      stderrEvidenceFile: result.stderrEvidenceFile,
+    });
+    return 1;
+  }
 
   const parsed = parseClaudeOutput(result.stdout ?? "");
-  const succeeded = parsed.ok && parsed.isError !== true && result.status === 0;
+  const succeeded = parsed.ok && parsed.isError !== true && result.status === 0 && !result.signal;
 
-  process.stdout.write(
-    JSON.stringify({
-      ok: succeeded,
-      status: succeeded ? "success" : "failure",
-      exitCode: result.status,
-      sessionId: parsed.sessionId ?? null,
-      model: parsed.model ?? null,
-      usage: parsed.usage ?? null,
-      result: parsed.result ?? null,
-      isError: parsed.ok ? parsed.isError : null,
-      parseError: parsed.parseError ?? null,
-      stdoutEvidenceFile,
-      stderrEvidenceFile,
-    }) + "\n",
-  );
+  writeSummary({
+    ok: succeeded,
+    status: succeeded ? "success" : "failure",
+    exitCode: result.status,
+    sessionId: parsed.sessionId ?? null,
+    model: parsed.model ?? null,
+    usage: parsed.usage ?? null,
+    result: parsed.result ?? null,
+    isError: parsed.ok ? parsed.isError : null,
+    parseError: parsed.parseError ?? null,
+    stdoutEvidenceFile: result.stdoutEvidenceFile,
+    stderrEvidenceFile: result.stderrEvidenceFile,
+  });
   return succeeded ? 0 : 1;
 }
 
 if (require.main === module) {
-  process.exit(main(process.argv.slice(2)));
+  main(process.argv.slice(2)).then((code) => process.exit(code));
 }
 
 module.exports = { main, parseArgs, validate, buildArgv, parseClaudeOutput, extractReportedModel, hasModelEvidence, UsageError };

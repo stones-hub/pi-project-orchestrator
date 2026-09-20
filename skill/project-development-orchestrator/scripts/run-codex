@@ -1,0 +1,352 @@
+#!/usr/bin/env node
+"use strict";
+
+/**
+ * Thin CLI wrapper around the real `codex` binary: builds the verified
+ * non-interactive argv shape (see references/codex.md), spawns it, streams
+ * raw JSONL stdout and stderr as evidence, and prints a small JSON summary.
+ * No auto-fallback, retry, commit/push/deploy, or credential handling.
+ */
+
+const fs = require("node:fs");
+const path = require("node:path");
+const { acquireWorkspaceWriteLock, canonicalizeWorkspace } = require("./workspace-write-lock");
+const { spawnWithEvidence, captureOverflowParseError, safePrepareEvidenceFiles } = require("./spawn-with-evidence");
+
+const MODES = new Set(["investigate", "code", "review"]);
+const MACOS_APP_CODEX = "/Applications/ChatGPT.app/Contents/Resources/codex";
+
+/**
+ * Resolve `command` only from absolute PATH directories. Empty segments and
+ * relative entries (`.`, `bin`, …) are ignored so cwd cannot supply a fake.
+ */
+function findExecutableOnPath(command, pathValue = process.env.PATH ?? "") {
+  for (const entry of pathValue.split(path.delimiter)) {
+    if (!entry) continue;
+    if (!path.isAbsolute(entry)) continue;
+    const candidate = path.join(entry, command);
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      if (fs.statSync(candidate).isFile()) return candidate;
+    } catch {
+      // Continue to the next PATH entry.
+    }
+  }
+  return null;
+}
+
+/**
+ * @param {NodeJS.ProcessEnv} [env]
+ * @param {string} [platform]
+ * @param {{ macosAppCodex?: string | null }} [options]
+ * @returns {string | null} Absolute command path, or null when undiscoverable.
+ *   Never returns a bare `codex` name for system PATH re-lookup.
+ */
+function defaultCodexCommand(env = process.env, platform = process.platform, options = {}) {
+  if (env.CODEX_COMMAND) return env.CODEX_COMMAND;
+  const pathCommand = findExecutableOnPath("codex", env.PATH ?? "");
+  if (pathCommand) return pathCommand;
+  const appPath = options.macosAppCodex === undefined ? MACOS_APP_CODEX : options.macosAppCodex;
+  if (platform === "darwin" && appPath && fs.existsSync(appPath)) return appPath;
+  return null;
+}
+
+class UsageError extends Error {}
+
+function parseArgs(argv) {
+  const opts = {
+    mode: null,
+    prompt: null,
+    model: null,
+    evidenceFile: null,
+    resume: null,
+    workspace: null,
+    command: undefined,
+    commandExplicit: false,
+  };
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    switch (arg) {
+      case "--mode": opts.mode = argv[++i]; break;
+      case "--prompt": opts.prompt = argv[++i]; break;
+      case "--model": opts.model = argv[++i]; break;
+      case "--evidence-file": opts.evidenceFile = argv[++i]; break;
+      case "--resume": opts.resume = argv[++i]; break;
+      case "--workspace": opts.workspace = argv[++i]; break;
+      case "--command":
+        // Explicit caller-trusted override; not automatic discovery.
+        opts.command = argv[++i];
+        opts.commandExplicit = true;
+        break;
+      case "--argv-prefix":
+        throw new UsageError("--argv-prefix is not accepted; use an executable --command shim for tests");
+      default: throw new UsageError(`unknown argument '${arg}'`);
+    }
+  }
+  return opts;
+}
+
+function validate(opts) {
+  if (!opts.mode || !MODES.has(opts.mode)) {
+    throw new UsageError(`--mode must be one of investigate|code|review, got '${opts.mode}'`);
+  }
+  if (!opts.prompt) throw new UsageError("--prompt is required");
+  if (!opts.model) throw new UsageError("--model is required and must be non-empty");
+  if (!opts.evidenceFile) throw new UsageError("--evidence-file is required");
+  if (opts.mode === "review" && opts.resume) {
+    throw new UsageError("--resume is not allowed with --mode review; independent review must start a fresh session");
+  }
+}
+
+function buildArgv(opts, workspace) {
+  const sandbox = opts.mode === "code" ? "workspace-write" : "read-only";
+  const rootArgs = ["--sandbox", sandbox, "--ask-for-approval", "never", "--cd", workspace, "--model", opts.model, "exec"];
+  if (opts.resume) {
+    return [...rootArgs, "resume", "--json", opts.resume, opts.prompt];
+  }
+  return [...rootArgs, "--json", opts.prompt];
+}
+
+function parseCodexOutput(stdout) {
+  const events = [];
+  for (const rawLine of stdout.split("\n")) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    try {
+      events.push(JSON.parse(line));
+    } catch {
+      return { ok: false, parseError: "stdout contains an invalid JSONL line" };
+    }
+  }
+  if (events.length === 0) return { ok: false, parseError: "stdout has no JSONL events" };
+
+  const started = events.find((event) => event?.type === "thread.started" && typeof event.thread_id === "string");
+  if (!started) return { ok: false, parseError: "JSONL is missing thread.started/thread_id" };
+
+  const failed = events.find((event) => event?.type === "turn.failed");
+  const completed = events.findLast((event) => event?.type === "turn.completed");
+  const messages = events
+    .filter((event) => event?.type === "item.completed" && event.item?.type === "agent_message" && typeof event.item.text === "string")
+    .map((event) => event.item.text);
+
+  if (failed) {
+    return {
+      ok: true,
+      sessionId: started.thread_id,
+      model: null,
+      result: typeof failed.error?.message === "string" ? failed.error.message : "Codex turn failed",
+      isError: true,
+      usage: null,
+    };
+  }
+  if (!completed) return { ok: false, parseError: "JSONL is missing a terminal turn.completed/turn.failed event" };
+  if (messages.length === 0) return { ok: false, parseError: "completed turn is missing an agent_message" };
+
+  return {
+    ok: true,
+    sessionId: started.thread_id,
+    model: null,
+    result: messages[messages.length - 1],
+    isError: false,
+    usage: completed.usage ?? null,
+  };
+}
+
+function writeSummary(payload) {
+  process.stdout.write(JSON.stringify(payload) + "\n");
+}
+
+/**
+ * @param {string[]} argv
+ * @param {{
+ *   env?: NodeJS.ProcessEnv,
+ *   platform?: string,
+ *   macosAppCodex?: string | null,
+ *   evidenceDeps?: object,
+ * }} [discovery]
+ */
+async function main(argv, discovery = {}) {
+  let opts;
+  try {
+    opts = parseArgs(argv);
+    validate(opts);
+  } catch (err) {
+    if (err instanceof UsageError) {
+      writeSummary({ ok: false, status: "blocked", reason: err.message });
+      return 2;
+    }
+    throw err;
+  }
+
+  if (!opts.commandExplicit) {
+    opts.command = defaultCodexCommand(
+      discovery.env ?? process.env,
+      discovery.platform ?? process.platform,
+      { macosAppCodex: discovery.macosAppCodex },
+    );
+  }
+
+  let cwd;
+  try {
+    cwd = canonicalizeWorkspace(opts.workspace ?? process.cwd());
+  } catch (err) {
+    writeSummary({ ok: false, status: "blocked", reason: `workspace cannot be resolved: ${String(err.message ?? err)}` });
+    return 2;
+  }
+
+  let writeLock = null;
+  if (opts.mode === "code") {
+    try {
+      writeLock = acquireWorkspaceWriteLock(cwd, "codex");
+    } catch (err) {
+      writeSummary({ ok: false, status: "blocked", reason: `workspace write lock failed: ${String(err.message ?? err)}` });
+      return 2;
+    }
+    if (!writeLock.ok) {
+      writeSummary({ ok: false, status: "blocked", reason: writeLock.reason });
+      return 2;
+    }
+  }
+
+  if (!opts.command) {
+    try {
+      const evidence = safePrepareEvidenceFiles(opts.evidenceFile, discovery.evidenceDeps);
+      if (evidence.setupFailed) {
+        writeSummary({
+          ok: false,
+          status: "failure",
+          exitCode: null,
+          sessionId: null,
+          model: null,
+          usage: null,
+          result: null,
+          isError: null,
+          parseError: String(evidence.error?.message ?? evidence.error ?? "evidence setup failed"),
+          stdoutEvidenceFile: evidence.stdoutEvidenceFile,
+          stderrEvidenceFile: evidence.stderrEvidenceFile,
+        });
+        return 1;
+      }
+      writeSummary({
+        ok: false,
+        status: "executor_unavailable",
+        reason: "codex executable not found on absolute PATH entries and no macOS app fallback",
+        stdoutEvidenceFile: evidence.stdoutEvidenceFile,
+        stderrEvidenceFile: evidence.stderrEvidenceFile,
+      });
+      return 3;
+    } finally {
+      writeLock?.release();
+      writeLock = null;
+    }
+  }
+
+  const spawnArgv = buildArgv(opts, cwd);
+  let result;
+  try {
+    result = await spawnWithEvidence({
+      command: opts.command,
+      argv: spawnArgv,
+      cwd,
+      evidenceFile: opts.evidenceFile,
+      ...(discovery.evidenceDeps || {}),
+    });
+  } finally {
+    writeLock?.release();
+  }
+
+  if (result.setupFailed) {
+    writeSummary({
+      ok: false,
+      status: "failure",
+      exitCode: null,
+      sessionId: null,
+      model: null,
+      usage: null,
+      result: null,
+      isError: null,
+      parseError: String(result.error?.message ?? result.error ?? "evidence setup failed"),
+      stdoutEvidenceFile: result.stdoutEvidenceFile,
+      stderrEvidenceFile: result.stderrEvidenceFile,
+    });
+    return 1;
+  }
+
+  if (result.startFailed) {
+    writeSummary({
+      ok: false,
+      status: "executor_unavailable",
+      reason: String(result.error?.message ?? result.error ?? "executor failed to start"),
+      stdoutEvidenceFile: result.stdoutEvidenceFile,
+      stderrEvidenceFile: result.stderrEvidenceFile,
+    });
+    return 3;
+  }
+
+  if (result.error && !result.startFailed) {
+    writeSummary({
+      ok: false,
+      status: "failure",
+      exitCode: result.status,
+      sessionId: null,
+      model: null,
+      usage: null,
+      result: null,
+      isError: null,
+      parseError: String(result.error.message ?? result.error),
+      stdoutEvidenceFile: result.stdoutEvidenceFile,
+      stderrEvidenceFile: result.stderrEvidenceFile,
+    });
+    return 1;
+  }
+
+  if (result.captureTruncated) {
+    writeSummary({
+      ok: false,
+      status: "failure",
+      exitCode: result.status,
+      sessionId: null,
+      model: null,
+      usage: null,
+      result: null,
+      isError: null,
+      parseError: captureOverflowParseError(result.captureLimit),
+      stdoutEvidenceFile: result.stdoutEvidenceFile,
+      stderrEvidenceFile: result.stderrEvidenceFile,
+    });
+    return 1;
+  }
+
+  const parsed = parseCodexOutput(result.stdout ?? "");
+  const succeeded = parsed.ok && parsed.isError !== true && result.status === 0 && !result.signal;
+  writeSummary({
+    ok: succeeded,
+    status: succeeded ? "success" : "failure",
+    exitCode: result.status,
+    sessionId: parsed.sessionId ?? null,
+    model: parsed.model ?? null,
+    usage: parsed.usage ?? null,
+    result: parsed.result ?? null,
+    isError: parsed.ok ? parsed.isError : null,
+    parseError: parsed.parseError ?? null,
+    stdoutEvidenceFile: result.stdoutEvidenceFile,
+    stderrEvidenceFile: result.stderrEvidenceFile,
+  });
+  return succeeded ? 0 : 1;
+}
+
+if (require.main === module) {
+  main(process.argv.slice(2)).then((code) => process.exit(code));
+}
+
+module.exports = {
+  main,
+  parseArgs,
+  validate,
+  buildArgv,
+  parseCodexOutput,
+  findExecutableOnPath,
+  defaultCodexCommand,
+  UsageError,
+  MACOS_APP_CODEX,
+};

@@ -56,7 +56,7 @@
 
 ## 执行器会话信息
 
-- executor：`TODO`（claude / cursor）
+- executor：`TODO`（claude / cursor / codex）
 - 请求模型别名：`TODO`
 - 响应证明的真实模型：`TODO`（证明不了写“未证明”）
 - session_id：`TODO`
