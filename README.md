@@ -12,8 +12,8 @@ Obsidian 为真源。
 ## 前提条件
 
 - Node.js `^22.19.0 || ^24.0.0 || >=26.0.0`（与本仓库 `package.json`
-  `engines.node` 一致：既满足当前 `@earendil-works/pi-coding-agent` 0.85.1
-  的 `>=22.19.0` 下限，也落在 `vitest` 5 实际支持的
+  `engines.node` 一致：既满足当前实测的 `@earendil-works/pi-coding-agent` 0.86.0
+  所声明的 `>=22.19.0` 下限，也落在 `vitest` 5 实际支持的
   `^22.12.0 || ^24.0.0 || >=26.0.0` 范围内——不能简单写成 `>=22.19.0`，
   否则会包含 vitest 5 不支持的 Node 23.x/25.x。版本升级后请以两者实际
   声明的 `engines` 为准）。
@@ -45,8 +45,7 @@ pi install git:github.com/stones-hub/pi-project-orchestrator@v0.3.0
 pi install git:github.com/stones-hub/pi-project-orchestrator@v0.3.0 -l
 ```
 
-> 以上命令将在 `v0.3.0` tag 创建并推送后可用。打 tag、push 均需单独授权；
-> 发布前试用当前候选请使用下面的“试用”方式。
+`v0.3.0` 已发布；以上命令会安装固定 tag，不会自动跟随后续版本。
 
 安装完成后确认包已注册：
 
